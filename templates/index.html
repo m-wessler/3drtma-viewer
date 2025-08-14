@@ -273,6 +273,7 @@
                         <option value="{{ key }}" {% if key == 'TMP' %}selected{% endif %}>{{ description }}</option>
                         {% endfor %}
                     </select>
+                    <div id="variable-note" style="margin-top:6px;font-size:12px;color:#666;">Note: for differences, units follow the variable (3DRTMA - RTMA).</div>
                 </div>
                 
                 <button type="button" class="btn btn-secondary" onclick="checkAvailability()">Check Data</button>
@@ -346,14 +347,15 @@
             const dataSource = this.value;
             const pressureLevelGroup = document.getElementById('pressure-level-group');
             const pressureLevelSelect = document.getElementById('pressure_level');
-            
-            if (dataSource === '3DRTMA') {
+
+            // Show pressure level selector for both 3DRTMA and RTMA (RTMA will offer only surface)
+            if (dataSource === '3DRTMA' || dataSource === 'RTMA') {
                 pressureLevelGroup.style.display = 'block';
                 loadPressureLevels();
                 loadFilteredVariables();
             } else {
                 pressureLevelGroup.style.display = 'none';
-                pressureLevelSelect.innerHTML = '<option value="">N/A for surface data</option>';
+                pressureLevelSelect.innerHTML = '<option value="">N/A for this data source</option>';
                 loadFilteredVariables();
             }
         });
@@ -361,8 +363,11 @@
         // Pressure level change handler
         document.getElementById('pressure_level').addEventListener('change', function() {
             const dataSource = document.getElementById('data_source').value;
+            // For 3DRTMA, load variables for selected pressure level; for RTMA (surface) reload filtered variables
             if (dataSource === '3DRTMA' && this.value) {
                 loadVariablesForPressureLevel();
+            } else if (dataSource === 'RTMA') {
+                loadFilteredVariables();
             }
         });
 
@@ -373,11 +378,25 @@
             const dataSource = document.getElementById('data_source').value;
             const pressureLevelSelect = document.getElementById('pressure_level');
             
-            if (dataSource !== '3DRTMA' || !date) {
-                return;
-            }
-            
-            pressureLevelSelect.innerHTML = '<option value="">Loading levels...</option>';
+                if (!date) {
+                    return;
+                }
+
+                // For RTMA we only need a single surface level (0)
+                if (dataSource === 'RTMA') {
+                    pressureLevelSelect.innerHTML = '';
+                    const option = document.createElement('option');
+                    option.value = 0;
+                    option.textContent = 'Surface (0 mb)';
+                    pressureLevelSelect.appendChild(option);
+                    return;
+                }
+
+                if (dataSource !== '3DRTMA') {
+                    return;
+                }
+
+                pressureLevelSelect.innerHTML = '<option value="">Loading levels...</option>';
             
             try {
                 const response = await fetch('/get_pressure_levels', {
@@ -573,11 +592,52 @@
                 if (dateToSend && dateToSend.includes('-')) {
                     dateToSend = dateToSend.replace(/-/g, '');
                 }
+
+                // If the data source is the virtual 3DRTMA_minus_RTMA, request the difference overlay
+                if (data_source === '3DRTMA_minus_RTMA' || data_source === '3DRTMA minus RTMA' || data_source === '3DRTMA-RTMA') {
+                    const body = { date: dateToSend, hour: parseInt(hour), variable, data_source };
+                    const resp = await fetch('/get_variable_data', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    const result = await resp.json();
+                    document.getElementById('loading').style.display = 'none';
+                    if (!result.success) {
+                        showStatus(result.error || 'Failed to generate difference overlay', 'error');
+                        return;
+                    }
+
+                    // Build a small Leaflet HTML page and set iframe.srcdoc
+                    const bounds = result.bounds; // [[south, west], [north, east]]
+                    const imgRef = result.image_url ? result.image_url : ('data:image/png;base64,' + (result.image_data || ''));
+                    const leafletHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <title>Difference Overlay</title>
+                        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                        <style>html,body,#map{height:100%;margin:0;padding:0}</style>
+                        </head><body><div id="map"></div>
+                        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
+                        <script>
+                        const map = L.map('map').fitBounds(${JSON.stringify(bounds)});
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM'}).addTo(map);
+                        const img = ${JSON.stringify(imgRef)};
+                        const boundsArr = ${JSON.stringify(bounds)};
+                        const overlay = L.imageOverlay(img, boundsArr, {opacity:0.8}).addTo(map);
+                        L.control.scale().addTo(map);
+                        <\/script><\/body></html>`;
+
+                    const mapFrame = document.getElementById('mapFrame');
+                    mapFrame.srcdoc = leafletHtml;
+                    document.getElementById('mapContainer').classList.remove('hidden');
+                    showStatus('Difference overlay ready', 'success');
+                    return;
+                }
+
                 const requestBody = { date: dateToSend, hour: parseInt(hour), variable, data_source };
                 if (pressure_level) {
                     requestBody.pressure_level = parseInt(pressure_level);
                 }
-                
+
                 const response = await fetch('/generate_map', {
                     method: 'POST',
                     headers: {
@@ -585,11 +645,11 @@
                     },
                     body: JSON.stringify(requestBody)
                 });
-                
+
                 const result = await response.json();
-                
+
                 document.getElementById('loading').style.display = 'none';
-                
+
                 if (result.success) {
                     showStatus(result.message, 'success');
                     const mapFrame = document.getElementById('mapFrame');
@@ -605,9 +665,81 @@
         }
 
         // Initialize drag functionality and filtered variables on page load
+        async function findLatestAvailableRTMATimestamp(daysBack = 2) {
+            // Check today, yesterday, ... up to daysBack and hours from 23..0
+            const now = new Date();
+            for (let d = 0; d <= daysBack; d++) {
+                const checkDate = new Date(now);
+                checkDate.setDate(now.getDate() - d);
+                const yyyy = checkDate.getFullYear();
+                const mm = String(checkDate.getMonth() + 1).padStart(2, '0');
+                const dd = String(checkDate.getDate()).padStart(2, '0');
+                const dateStr = `${yyyy}-${mm}-${dd}`;
+
+                for (let h = 23; h >= 0; h--) {
+                    try {
+                        const resp = await fetch('/check_data_availability', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ date: dateStr, hour: h })
+                        });
+                        if (!resp.ok) continue;
+                        const result = await resp.json();
+                        if (result.available) {
+                            return { date: dateStr, hour: h, checked_url: result.checked_url };
+                        }
+                    } catch (e) {
+                        // ignore and continue
+                    }
+                }
+            }
+            return null;
+        }
+
+        async function findLatestAndGenerate() {
+            showStatus('Finding latest RTMA data timestamp...', 'info');
+            const found = await findLatestAvailableRTMATimestamp(2);
+            if (found) {
+                // Pre-select RTMA, surface, TMP and generate map
+                document.getElementById('data_source').value = 'RTMA';
+                const pressureLevelGroup = document.getElementById('pressure-level-group');
+                const pressureLevelSelect = document.getElementById('pressure_level');
+                pressureLevelGroup.style.display = 'block';
+                pressureLevelSelect.innerHTML = '';
+                const opt = document.createElement('option'); opt.value = 0; opt.textContent = 'Surface (0 mb)';
+                pressureLevelSelect.appendChild(opt);
+
+                document.getElementById('date').value = found.date;
+                document.getElementById('hour').value = String(found.hour).padStart(2, '0');
+                document.getElementById('variable').value = 'TMP';
+
+                await loadFilteredVariables();
+                // Generate the map
+                generateMap();
+                showStatus('Loaded latest RTMA surface map: ' + found.date + ' ' + String(found.hour).padStart(2,'0') + 'Z', 'success');
+                return true;
+            } else {
+                showStatus('No recent RTMA data found (tried last 2 days).', 'error');
+                return false;
+            }
+        }
+
         window.addEventListener('load', function() {
             initializeDragFunctionality();
+            // Pre-select RTMA and surface level
+            document.getElementById('data_source').value = 'RTMA';
+            const pressureLevelGroup = document.getElementById('pressure-level-group');
+            const pressureLevelSelect = document.getElementById('pressure_level');
+            pressureLevelGroup.style.display = 'block';
+            pressureLevelSelect.innerHTML = '';
+            const opt = document.createElement('option'); opt.value = 0; opt.textContent = 'Surface (0 mb)';
+            pressureLevelSelect.appendChild(opt);
+            // Default variable to TMP
+            document.getElementById('variable').value = 'TMP';
+
             loadFilteredVariables();
+            // Find latest available RTMA timestamp and auto-generate map
+            findLatestAndGenerate();
         });
     </script>
 </body>

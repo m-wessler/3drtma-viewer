@@ -1,5 +1,11 @@
+import os
+import sys
 import pytest
-from app import date_to_yyyymmdd, validate_pressure_level
+
+# Ensure project root is on sys.path for imports when running pytest from tests/
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from app_utils import date_to_yyyymmdd, validate_pressure_level
 
 
 def test_date_to_yyyymmdd_accepts_yyyymmdd():
