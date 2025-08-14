@@ -48,10 +48,46 @@ logger = logging.getLogger(__name__)
 class WeatherMapConfig:
     """Configuration class for weather map generation."""
     
-    # NOAA RTMA data URL patterns
-    BASE_URL = "https://noaa-rtma-pds.s3.amazonaws.com"
-    GRIB_PATTERN = "{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.2dvaranl_ndfd.grb2_wexp"
-    IDX_PATTERN = "{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.2dvaranl_ndfd.grb2_wexp.idx"
+    # Data source configurations
+    DATA_SOURCES = {
+        'RTMA': {
+            'name': 'RTMA 2.5km Surface',
+            'base_url': 'https://noaa-rtma-pds.s3.amazonaws.com',
+            'grib_pattern': '{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.2dvaranl_ndfd.grb2_wexp',
+            'idx_pattern': '{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.2dvaranl_ndfd.grb2_wexp.idx',
+            'has_pressure_levels': False
+        },
+        'RTMA-PRES': {
+            'name': 'RTMA 2.5km Pressure Levels', 
+            'base_url': 'https://noaa-rtma-pds.s3.amazonaws.com',
+            'grib_pattern': '{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.3dvaranl_ndfd.grb2_wexp',
+            'idx_pattern': '{base_url}/rtma2p5.{date}/rtma2p5.t{hour:02d}z.3dvaranl_ndfd.grb2_wexp.idx',
+            'has_pressure_levels': True
+        },
+        '3DRTMA': {
+            'name': '3D-RTMA Pressure Levels',
+            'base_url': 'https://noaa-nws-3drtma-pds.s3.amazonaws.com',
+            'grib_pattern': '{base_url}/3drtma/results/rtma_a/rtma3d_hrrr.v1.0.0/prod/rtma3d.{date}/{hour:02d}/rtma3d.t{hour:02d}z.anl_prslev_ndfd.grib2',
+            'idx_pattern': '{base_url}/3drtma/results/rtma_a/rtma3d_hrrr.v1.0.0/prod/rtma3d.{date}/{hour:02d}/rtma3d.t{hour:02d}z.anl_prslev_ndfd.grib2.idx',
+            'has_pressure_levels': True
+        }
+    }
+    
+    # Default data source
+    DEFAULT_DATA_SOURCE = 'RTMA'
+    
+    # Legacy properties for backward compatibility
+    @property
+    def BASE_URL(self):
+        return self.DATA_SOURCES[self.DEFAULT_DATA_SOURCE]['base_url']
+    
+    @property 
+    def GRIB_PATTERN(self):
+        return self.DATA_SOURCES[self.DEFAULT_DATA_SOURCE]['grib_pattern']
+    
+    @property
+    def IDX_PATTERN(self):
+        return self.DATA_SOURCES[self.DEFAULT_DATA_SOURCE]['idx_pattern']
     
     # Variable definitions
     VARIABLE_INFO = {
@@ -67,6 +103,28 @@ class WeatherMapConfig:
         'APCP': {'name': 'Precipitation', 'units': 'mm', 'multiplier': 1, 'cmap': 'Blues'},
         'VIS': {'name': 'Visibility', 'units': 'km', 'multiplier': 0.001, 'cmap': 'viridis'},
         'TCDC': {'name': 'Total Cloud Cover', 'units': '%', 'multiplier': 1, 'cmap': 'gray'},
+        'HGT': {'name': 'Geopotential Height', 'units': 'm', 'multiplier': 1, 'cmap': 'terrain'},
+    }
+    
+    # Pressure levels available in 3DRTMA data
+    PRESSURE_LEVELS = [
+        50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300, 325, 350, 375, 400, 
+        425, 450, 475, 500, 525, 550, 575, 600, 625, 650, 675, 700, 725, 750, 
+        775, 800, 825, 850, 875, 900, 925, 950, 975, 1000
+    ]
+    
+    # Common pressure levels with names
+    COMMON_PRESSURE_LEVELS = {
+        0: 'Surface Level',
+        50: '50 mb (~20 km, Lower Stratosphere)',
+        100: '100 mb (~16 km, Tropopause)',
+        200: '200 mb (~12 km, Upper Troposphere)', 
+        300: '300 mb (~9 km, Jet Stream Level)',
+        500: '500 mb (~5.5 km, Mid-Troposphere)',
+        700: '700 mb (~3 km, Lower Troposphere)',
+        850: '850 mb (~1.5 km, Boundary Layer)',
+        925: '925 mb (~750 m, Near Surface)',
+        1000: '1000 mb (Sea Level)'
     }
     
     # Map settings
@@ -145,9 +203,10 @@ class GRIBDataProcessor:
         default = {'name': variable_name, 'units': 'raw', 'multiplier': 1, 'cmap': 'viridis'}
         return self.config.VARIABLE_INFO.get(variable_name, default)
     
-    def load_single_variable(self, grib_url: str, idx_url: str, variable_name: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, np.ndarray]]]:
+    def load_single_variable(self, grib_url: str, idx_url: str, variable_name: str, pressure_level: Optional[int] = None) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, np.ndarray]]]:
         """Load a single variable from the GRIB2 file using byte slicing."""
-        logger.info(f"Loading single variable: {variable_name}")
+        level_msg = f" at {pressure_level}mb" if pressure_level and pressure_level > 0 else " at surface" if pressure_level == 0 else ""
+        logger.info(f"Loading single variable: {variable_name}{level_msg}")
         
         inventory = self.get_grib_inventory(idx_url)
         
@@ -155,11 +214,38 @@ class GRIBDataProcessor:
         target_record = None
         for record in inventory:
             if record['variable'] == variable_name:
-                target_record = record
-                break
+                # For 3DRTMA data, check pressure level if specified
+                if pressure_level is not None:
+                    level_str = record['level']
+                    if pressure_level == 0:
+                        # Surface level - look for "surface" or "sfc" in level string
+                        if 'surface' in level_str.lower() or 'sfc' in level_str.lower():
+                            target_record = record
+                            break
+                    else:
+                        # Pressure level format in 3DRTMA is typically "pressure mb" 
+                        if f"{pressure_level} mb" in level_str or f"{pressure_level}mb" in level_str:
+                            target_record = record
+                            break
+                else:
+                    # For RTMA data or when no pressure level specified, take first match
+                    target_record = record
+                    break
         
         if target_record is None:
-            logger.error(f"Variable {variable_name} not found in inventory")
+            level_msg = f" at {pressure_level}mb" if pressure_level and pressure_level > 0 else " at surface" if pressure_level == 0 else ""
+            logger.error(f"Variable {variable_name}{level_msg} not found in inventory")
+            
+            # Log available records for debugging
+            if pressure_level is not None:
+                matching_vars = [r for r in inventory if r['variable'] == variable_name]
+                if matching_vars:
+                    available_levels = [r['level'] for r in matching_vars]
+                    logger.info(f"Available levels for {variable_name}: {available_levels}")
+                else:
+                    available_vars = list(set(r['variable'] for r in inventory))
+                    logger.info(f"Variable {variable_name} not found. Available variables: {available_vars[:10]}...")
+            
             return None, None
         
         try:
@@ -205,7 +291,12 @@ class GRIBDataProcessor:
                     os.remove(temp_file_path)
                     
         except Exception as e:
-            logger.error(f"Error loading {variable_name}: {e}")
+            error_msg = str(e)
+            if "JPEG support not enabled" in error_msg or "Functionality not enabled" in error_msg:
+                logger.error(f"Error loading {variable_name}: JPEG compression not supported. "
+                           f"3DRTMA data requires eccodes with JPEG support. Error: {e}")
+            else:
+                logger.error(f"Error loading {variable_name}: {e}")
             return None, None
         
         return None, None
@@ -364,7 +455,8 @@ class WeatherMapRenderer:
                                  coords: Dict[str, np.ndarray], 
                                  variable_name: str,
                                  available_variables: List[str],
-                                 date: str, hour: int) -> folium.Map:
+                                 date: str, hour: int,
+                                 data_source: str = 'RTMA') -> folium.Map:
         """Create interactive map with single variable and AJAX variable switching."""
         
         lat_grid = coords['lat_grid']
@@ -425,8 +517,8 @@ class WeatherMapRenderer:
             'cmap': var_info['cmap']
         }
         
-        # Add control panel with AJAX functionality
-        self._add_ajax_control_panel(m, variable_name, variable_info, available_variables, date, hour)
+        # Add simple opacity control panel
+        self._add_opacity_control(m)
         
         return m
 
@@ -525,7 +617,7 @@ class WeatherMapRenderer:
     def _add_ajax_control_panel(self, m: folium.Map, current_variable: str, 
                                variable_info: Dict[str, Any], 
                                available_variables: List[str],
-                               date: str, hour: int) -> None:
+                               date: str, hour: int, data_source: str = 'RTMA') -> None:
         """Add interactive control panel with AJAX variable switching."""
         
         # Create dropdown options
@@ -595,6 +687,7 @@ class WeatherMapRenderer:
         var currentVariable = '{current_variable}';
         var currentDate = '{date}';
         var currentHour = {hour};
+        var currentDataSource = '{data_source}';
         var map = window['{m.get_name()}'];  // Get the map from window object
         var currentOverlay = null;
         
@@ -728,7 +821,8 @@ class WeatherMapRenderer:
             var requestData = {{
                 date: dateToSend,
                 hour: currentHour,
-                variable: newVariable
+                variable: newVariable,
+                data_source: currentDataSource
             }};
             
             showDebugInfo('Sending request: ' + JSON.stringify(requestData));
@@ -844,6 +938,63 @@ class WeatherMapRenderer:
         '''
         
         m.get_root().html.add_child(folium.Element(control_panel_html))
+    
+    def _add_opacity_control(self, m: folium.Map) -> None:
+        """Add simple opacity control to map."""
+        
+        # Simple opacity control panel HTML
+        opacity_control_html = f'''
+        <div id="opacityPanel" style="position: fixed; 
+                    top: 10px; right: 10px; width: 200px; 
+                    background-color: white; border:2px solid grey; z-index:9999; 
+                    font-size:12px; padding: 15px; border-radius: 5px;">
+        
+        <!-- Opacity Slider -->
+        <div>
+            <label for="opacitySlider" style="font-weight: bold; display: block; margin-bottom: 5px;">
+                Layer Opacity: <span id="opacityValue">60%</span>
+            </label>
+            <input type="range" id="opacitySlider" min="0" max="100" value="60" 
+                   style="width: 100%;" oninput="updateOpacity(this.value)">
+        </div>
+        </div>
+        
+        <script>
+        // Get map reference
+        var map = window['{m.get_name()}'];
+        
+        // Find current overlay on map
+        function findCurrentOverlay() {{
+            var overlay = null;
+            if (!map || typeof map.eachLayer !== 'function') {{
+                console.error('Map not available or eachLayer method not found');
+                return null;
+            }}
+            
+            try {{
+                map.eachLayer(function(layer) {{
+                    if (layer.options && layer.options.name === 'weather_overlay') {{
+                        overlay = layer;
+                    }}
+                }});
+            }} catch (e) {{
+                console.error('Error finding overlay:', e);
+            }}
+            return overlay;
+        }}
+        
+        function updateOpacity(value) {{
+            var opacity = value / 100;
+            var overlay = findCurrentOverlay();
+            if (overlay) {{
+                overlay.setOpacity(opacity);
+            }}
+            document.getElementById('opacityValue').textContent = value + '%';
+        }}
+        </script>
+        '''
+        
+        m.get_root().html.add_child(folium.Element(opacity_control_html))
     
     def _add_control_panel(self, m: folium.Map, all_data: Dict[str, Any], 
                           variable_info_json: Dict[str, Any], first_var: str) -> None:
@@ -961,28 +1112,130 @@ class WeatherMapGenerator:
         self.processor = GRIBDataProcessor(self.config)
         self.renderer = WeatherMapRenderer(self.config)
     
-    def generate_urls(self, date: str, hour: int) -> Tuple[str, str]:
-        """Generate GRIB and index URLs for given date and hour."""
-        grib_url = self.config.GRIB_PATTERN.format(
-            base_url=self.config.BASE_URL, date=date, hour=hour
+    def generate_urls(self, date: str, hour: int, data_source: str = None) -> Tuple[str, str]:
+        """Generate GRIB and index URLs for given date, hour, and data source."""
+        if data_source is None:
+            data_source = self.config.DEFAULT_DATA_SOURCE
+            
+        if data_source not in self.config.DATA_SOURCES:
+            raise ValueError(f"Unknown data source: {data_source}. Available: {list(self.config.DATA_SOURCES.keys())}")
+        
+        source_config = self.config.DATA_SOURCES[data_source]
+        
+        grib_url = source_config['grib_pattern'].format(
+            base_url=source_config['base_url'], date=date, hour=hour
         )
-        idx_url = self.config.IDX_PATTERN.format(
-            base_url=self.config.BASE_URL, date=date, hour=hour
+        idx_url = source_config['idx_pattern'].format(
+            base_url=source_config['base_url'], date=date, hour=hour
         )
         return grib_url, idx_url
     
-    def create_single_variable_weather_map(self, date: str, hour: int, output_path: str, variable_name: str = 'TMP') -> bool:
+    def get_available_pressure_levels(self, date: str, hour: int, data_source: str) -> List[int]:
+        """Get available pressure levels for pressure-enabled data sources."""
+        source_config = self.config.DATA_SOURCES.get(data_source, {})
+        if not source_config.get('has_pressure_levels', False):
+            return []
+        
+        try:
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
+            inventory = self.processor.get_grib_inventory(idx_url)
+            
+            pressure_levels = set()
+            has_surface = False
+            
+            for record in inventory:
+                level_str = record['level']
+                # Check for surface level first
+                if 'surface' in level_str.lower() or 'sfc' in level_str.lower():
+                    has_surface = True
+                # Extract pressure level from strings like "500 mb" 
+                elif 'mb' in level_str:
+                    parts = level_str.split()
+                    for part in parts:
+                        if part.isdigit():
+                            pressure_levels.add(int(part))
+                            break
+            
+            levels = sorted(list(pressure_levels))
+            # Add surface level as 0 mb if it exists
+            if has_surface:
+                levels.insert(0, 0)
+                
+            return levels
+        except Exception as e:
+            logger.error(f"Error getting pressure levels: {e}")
+            return []
+    
+    def get_filtered_variables(self, date: str, hour: int, data_source: str) -> List[str]:
+        """Get available variables, filtered for data source compatibility."""
+        try:
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
+            all_variables = self.processor.get_available_variables(idx_url)
+            
+            if data_source in ['3DRTMA', 'RTMA-PRES']:
+                # Filter out variables without proper short name mappings
+                filtered_variables = []
+                for var in all_variables:
+                    if var in self.config.VARIABLE_INFO:
+                        filtered_variables.append(var)
+                return filtered_variables
+            else:
+                # For RTMA surface, return all variables
+                return all_variables
+                
+        except Exception as e:
+            logger.error(f"Error getting filtered variables: {e}")
+            return []
+    
+    def get_variables_for_pressure_level(self, date: str, hour: int, data_source: str, pressure_level: int) -> List[str]:
+        """Get available variables for a specific pressure level in pressure-enabled data sources."""
+        source_config = self.config.DATA_SOURCES.get(data_source, {})
+        if not source_config.get('has_pressure_levels', False):
+            return self.get_filtered_variables(date, hour, data_source)
+        
+        try:
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
+            inventory = self.processor.get_grib_inventory(idx_url)
+            
+            # Find variables available at the specified pressure level
+            available_variables = set()
+            for record in inventory:
+                level_str = record['level']
+                variable = record['variable']
+                
+                # Check if this record matches the requested pressure level
+                level_matches = False
+                if pressure_level == 0:
+                    # Surface level
+                    if 'surface' in level_str.lower() or 'sfc' in level_str.lower():
+                        level_matches = True
+                else:
+                    # Pressure level
+                    if f"{pressure_level} mb" in level_str or f"{pressure_level}mb" in level_str:
+                        level_matches = True
+                
+                if level_matches and variable in self.config.VARIABLE_INFO:
+                    available_variables.add(variable)
+            
+            return sorted(list(available_variables))
+            
+        except Exception as e:
+            logger.error(f"Error getting variables for pressure level {pressure_level}: {e}")
+            return []
+    
+    def create_single_variable_weather_map(self, date: str, hour: int, output_path: str, variable_name: str = 'TMP', data_source: str = None, pressure_level: Optional[int] = None) -> bool:
         """Create weather map for a single variable (faster than loading all variables)."""
         try:
-            logger.info(f"Creating single variable weather map for {date} {hour:02d}Z, variable: {variable_name}")
+            level_msg = f" at {pressure_level}mb" if pressure_level else ""
+            logger.info(f"Creating single variable weather map for {date} {hour:02d}Z, variable: {variable_name}{level_msg}, source: {data_source or 'RTMA'}")
             
             # Generate URLs
-            grib_url, idx_url = self.generate_urls(date, hour)
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
             logger.info(f"GRIB URL: {grib_url}")
             logger.info(f"Index URL: {idx_url}")
             
             # Get available variables first
-            available_variables = self.processor.get_available_variables(idx_url)
+            available_variables = self.get_filtered_variables(date, hour, data_source or self.config.DEFAULT_DATA_SOURCE)
             if not available_variables:
                 logger.error("No variables found in data")
                 return False
@@ -993,7 +1246,7 @@ class WeatherMapGenerator:
                 variable_name = available_variables[0]
             
             # Load single variable data
-            variable_data, coords = self.processor.load_single_variable(grib_url, idx_url, variable_name)
+            variable_data, coords = self.processor.load_single_variable(grib_url, idx_url, variable_name, pressure_level)
             
             if not variable_data or coords is None:
                 logger.error(f"Failed to load variable {variable_name}")
@@ -1001,7 +1254,7 @@ class WeatherMapGenerator:
             
             # Create map
             weather_map = self.renderer.create_single_variable_map(
-                variable_data, coords, variable_name, available_variables, date, hour
+                variable_data, coords, variable_name, available_variables, date, hour, data_source or 'RTMA'
             )
             
             # Save map
@@ -1018,10 +1271,11 @@ class WeatherMapGenerator:
             logger.error(f"Failed to create single variable weather map: {e}")
             return False
     
-    def get_variable_data_json(self, date: str, hour: int, variable_name: str) -> Dict[str, Any]:
+    def get_variable_data_json(self, date: str, hour: int, variable_name: str, data_source: str = None, pressure_level: Optional[int] = None) -> Dict[str, Any]:
         """Get variable data as JSON for AJAX requests."""
         try:
-            logger.info(f"get_variable_data_json called with date={date}, hour={hour}, variable={variable_name}")
+            level_msg = f" at {pressure_level}mb" if pressure_level else ""
+            logger.info(f"get_variable_data_json called with date={date}, hour={hour}, variable={variable_name}{level_msg}, source={data_source or 'RTMA'}")
             
             # Validate date format
             if not date or len(date) != 8 or not date.isdigit():
@@ -1030,14 +1284,19 @@ class WeatherMapGenerator:
                 return {'success': False, 'error': error_msg}
             
             # Generate URLs
-            grib_url, idx_url = self.generate_urls(date, hour)
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
             logger.info(f"Generated URLs - GRIB: {grib_url}, IDX: {idx_url}")
             
             # Load single variable data
-            variable_data, coords = self.processor.load_single_variable(grib_url, idx_url, variable_name)
+            variable_data, coords = self.processor.load_single_variable(grib_url, idx_url, variable_name, pressure_level)
             
             if not variable_data or coords is None:
                 error_msg = f'Failed to load variable {variable_name} for date {date} hour {hour}'
+                level_msg = f" at {pressure_level}mb" if pressure_level and pressure_level > 0 else " at surface" if pressure_level == 0 else ""
+                if level_msg:
+                    error_msg += level_msg
+                    
+                # Only mention JPEG compression if it's actually a JPEG error, not for all 3DRTMA failures
                 logger.error(error_msg)
                 return {'success': False, 'error': error_msg}
             
@@ -1081,13 +1340,13 @@ class WeatherMapGenerator:
             logger.error(f"Failed to get variable data: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
-    def create_weather_map(self, date: str, hour: int, output_path: str) -> bool:
+    def create_weather_map(self, date: str, hour: int, output_path: str, data_source: str = None) -> bool:
         """Create weather map for specified date and hour."""
         try:
-            logger.info(f"Creating weather map for {date} {hour:02d}Z")
+            logger.info(f"Creating weather map for {date} {hour:02d}Z, source: {data_source or 'RTMA'}")
             
             # Generate URLs
-            grib_url, idx_url = self.generate_urls(date, hour)
+            grib_url, idx_url = self.generate_urls(date, hour, data_source)
             logger.info(f"GRIB URL: {grib_url}")
             logger.info(f"Index URL: {idx_url}")
             

@@ -1,196 +1,502 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Weather Map Generator</title>
+    <title>URMA/3DRTMA Viewer</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f0f0;
+            overflow: hidden;
+        }
+        
+        /* Full screen map container */
+        .map-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+        }
+        
+        .map-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
+        /* Control panel */
+        .control-panel {
+            position: fixed;
+            top: 80px;
+            left: 80px;
+            width: 350px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             padding: 20px;
-            background-color: #f5f5f5;
+            z-index: 1000;
+            font-size: 14px;
+            max-height: calc(100vh - 160px);
+            overflow-y: auto;
         }
-        .container {
-            background-color: white;
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        h1 {
+        
+        .control-panel h2 {
             color: #2c3e50;
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .form-group {
             margin-bottom: 20px;
+            font-size: 18px;
+            font-weight: 600;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            cursor: move;
+            position: relative;
+            user-select: none;
         }
-        label {
+        
+        .control-panel h2::after {
+            content: "⋮⋮";
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #7f8c8d;
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+        
+        .control-panel.dragging {
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+            transform: scale(1.02);
+            transition: none;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        .form-group label {
             display: block;
             margin-bottom: 5px;
-            font-weight: bold;
+            font-weight: 600;
             color: #34495e;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        input, select {
+        
+        .form-group select,
+        .form-group input {
             width: 100%;
-            padding: 10px;
+            padding: 8px 12px;
             border: 1px solid #ddd;
-            border-radius: 5px;
-            font-size: 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            transition: border-color 0.3s, box-shadow 0.3s;
         }
-        .button-group {
+        
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #3498db;
+            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+        }
+        
+        .form-row {
             display: flex;
             gap: 10px;
-            margin-top: 20px;
         }
-        button {
+        
+        .form-row .form-group {
             flex: 1;
-            padding: 12px 20px;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px;
             border: none;
-            border-radius: 5px;
-            font-size: 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
-            transition: background-color 0.3s;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
+        
         .btn-primary {
-            background-color: #3498db;
+            background: linear-gradient(135deg, #3498db, #2980b9);
             color: white;
         }
+        
         .btn-primary:hover {
-            background-color: #2980b9;
+            background: linear-gradient(135deg, #2980b9, #1abc9c);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
         }
+        
         .btn-secondary {
-            background-color: #95a5a6;
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
             color: white;
+            margin-bottom: 10px;
         }
+        
         .btn-secondary:hover {
-            background-color: #7f8c8d;
+            background: linear-gradient(135deg, #7f8c8d, #6c7b7d);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(149, 165, 166, 0.3);
         }
+        
         .status {
-            margin-top: 20px;
+            margin-top: 15px;
             padding: 10px;
-            border-radius: 5px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: center;
             display: none;
         }
+        
         .status.success {
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: rgba(46, 204, 113, 0.1);
+            color: #27ae60;
+            border: 1px solid rgba(46, 204, 113, 0.3);
         }
+        
         .status.error {
-            background-color: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: rgba(231, 76, 60, 0.1);
+            color: #e74c3c;
+            border: 1px solid rgba(231, 76, 60, 0.3);
         }
+        
         .status.info {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
+            background: rgba(52, 152, 219, 0.1);
+            color: #3498db;
+            border: 1px solid rgba(52, 152, 219, 0.3);
         }
+        
         .loading {
             text-align: center;
-            margin-top: 20px;
+            margin-top: 15px;
+            display: none;
         }
+        
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #3498db;
+            border: 3px solid rgba(52, 152, 219, 0.1);
+            border-top: 3px solid #3498db;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 2s linear infinite;
-            margin: 0 auto;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
         }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        iframe {
-            width: 100%;
-            height: 600px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin-top: 20px;
+        
+        .loading-text {
+            color: #3498db;
+            font-size: 12px;
+            font-weight: 600;
         }
-        .map-container {
-            margin-top: 30px;
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .control-panel {
+                width: calc(100vw - 40px);
+                max-width: 350px;
+            }
+        }
+        
+        /* Hide default map when loading */
+        .map-container.hidden {
             display: none;
-        }
-        .hour-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
-            gap: 5px;
-            margin-top: 10px;
-        }
-        .hour-btn {
-            padding: 8px;
-            border: 1px solid #ddd;
-            background-color: #f8f9fa;
-            cursor: pointer;
-            text-align: center;
-            border-radius: 3px;
-            transition: all 0.2s;
-        }
-        .hour-btn:hover {
-            background-color: #e9ecef;
-        }
-        .hour-btn.selected {
-            background-color: #3498db;
-            color: white;
-            border-color: #3498db;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1> NOAA Weather Map Generator</h1>
-        
-        <form id="weatherForm">
-            <div class="form-group">
-                <label for="date">Date:</label>
-                <input type="date" id="date" name="date" value="{{ default_date }}" max="{{ today }}" required>
-            </div>
+    <!-- Control Panel -->
+    <div class="control-panel" id="controlPanel">
+        <div class="panel-content">
+            <h2>🌤️ URMA/3DRTMA Viewer</h2>
             
-            <div class="form-group">
-                <label>Hour (UTC):</label>
-                <div class="hour-grid">
-                    {% for hour in range(0, 24) %}
-                    <div class="hour-btn {% if hour == 12 %}selected{% endif %}" data-hour="{{ '%02d'|format(hour) }}">
-                        {{ '%02d'|format(hour) }}Z
-                    </div>
-                    {% endfor %}
+            <form id="weatherForm">
+                <div class="form-group">
+                    <label for="date">Date</label>
+                    <input type="date" id="date" name="date" value="{{ default_date }}" max="{{ today }}" required>
                 </div>
-                <input type="hidden" id="hour" name="hour" value="12">
-            </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="hour">Hour (UTC)</label>
+                        <select id="hour" name="hour" required>
+                            {% for h in range(0, 24) %}
+                            <option value="{{ '%02d'|format(h) }}" {% if h == 12 %}selected{% endif %}>{{ '%02d'|format(h) }}:00 UTC</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="data_source">Data Source</label>
+                    <select id="data_source" name="data_source" required>
+                        {% for key, name in data_sources.items() %}
+                        <option value="{{ key }}" {% if key == 'RTMA' %}selected{% endif %}>{{ name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group" id="pressure-level-group" style="display: none;">
+                    <label for="pressure_level">Pressure Level</label>
+                    <select id="pressure_level" name="pressure_level">
+                        <option value="">Loading levels...</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="variable">Variable</label>
+                    <select id="variable" name="variable" required>
+                        {% for key, description in variables.items() %}
+                        <option value="{{ key }}" {% if key == 'TMP' %}selected{% endif %}>{{ description }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <button type="button" class="btn btn-secondary" onclick="checkAvailability()">Check Data</button>
+                <button type="button" class="btn btn-primary" onclick="generateMap()">Generate Map</button>
+            </form>
             
-            <div class="button-group">
-                <button type="button" class="btn-secondary" onclick="checkAvailability()">Check Data Availability</button>
-                <button type="submit" class="btn-primary">Generate Weather Map</button>
+            <div id="status" class="status"></div>
+            
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <div class="loading-text">Generating map...</div>
             </div>
-        </form>
-        
-        <div id="status" class="status"></div>
-        
-        <div id="loading" class="loading" style="display: none;">
-            <div class="spinner"></div>
-            <p>Generating weather map... This should take just a few seconds.</p>
-        </div>
-        
-        <div id="mapContainer" class="map-container">
-            <h3>Generated Weather Map:</h3>
-            <iframe id="mapFrame" src=""></iframe>
         </div>
     </div>
 
+    <!-- Full Screen Map Container -->
+    <div id="mapContainer" class="map-container hidden">
+        <iframe id="mapFrame" src=""></iframe>
+    </div>
+
     <script>
-        // Hour selection
-        document.querySelectorAll('.hour-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                document.querySelectorAll('.hour-btn').forEach(b => b.classList.remove('selected'));
-                this.classList.add('selected');
-                document.getElementById('hour').value = this.dataset.hour;
-            });
+        // Drag functionality
+        let isDragging = false;
+        let dragOffset = { x: 0, y: 0 };
+        
+        function initializeDragFunctionality() {
+            const panel = document.getElementById('controlPanel');
+            const header = panel.querySelector('h2');
+            
+            header.addEventListener('mousedown', startDrag);
+            document.addEventListener('mousemove', drag);
+            document.addEventListener('mouseup', stopDrag);
+            
+            function startDrag(e) {
+                if (panel.classList.contains('minimized')) return;
+                
+                isDragging = true;
+                panel.classList.add('dragging');
+                
+                const rect = panel.getBoundingClientRect();
+                dragOffset.x = e.clientX - rect.left;
+                dragOffset.y = e.clientY - rect.top;
+                
+                e.preventDefault();
+            }
+            
+            function drag(e) {
+                if (!isDragging) return;
+                
+                const x = e.clientX - dragOffset.x;
+                const y = e.clientY - dragOffset.y;
+                
+                // Constrain to viewport
+                const maxX = window.innerWidth - panel.offsetWidth;
+                const maxY = window.innerHeight - panel.offsetHeight;
+                
+                panel.style.left = Math.max(0, Math.min(maxX, x)) + 'px';
+                panel.style.top = Math.max(0, Math.min(maxY, y)) + 'px';
+            }
+            
+            function stopDrag() {
+                if (isDragging) {
+                    isDragging = false;
+                    panel.classList.remove('dragging');
+                }
+            }
+        }
+
+        // Data source change handler
+        document.getElementById('data_source').addEventListener('change', function() {
+            const dataSource = this.value;
+            const pressureLevelGroup = document.getElementById('pressure-level-group');
+            const pressureLevelSelect = document.getElementById('pressure_level');
+            
+            if (dataSource === '3DRTMA') {
+                pressureLevelGroup.style.display = 'block';
+                loadPressureLevels();
+                loadFilteredVariables();
+            } else {
+                pressureLevelGroup.style.display = 'none';
+                pressureLevelSelect.innerHTML = '<option value="">N/A for surface data</option>';
+                loadFilteredVariables();
+            }
         });
+
+        // Pressure level change handler
+        document.getElementById('pressure_level').addEventListener('change', function() {
+            const dataSource = document.getElementById('data_source').value;
+            if (dataSource === '3DRTMA' && this.value) {
+                loadVariablesForPressureLevel();
+            }
+        });
+
+        // Load pressure levels
+        async function loadPressureLevels() {
+            const date = document.getElementById('date').value;
+            const hour = document.getElementById('hour').value;
+            const dataSource = document.getElementById('data_source').value;
+            const pressureLevelSelect = document.getElementById('pressure_level');
+            
+            if (dataSource !== '3DRTMA' || !date) {
+                return;
+            }
+            
+            pressureLevelSelect.innerHTML = '<option value="">Loading levels...</option>';
+            
+            try {
+                const response = await fetch('/get_pressure_levels', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date, hour: parseInt(hour), data_source: dataSource })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    pressureLevelSelect.innerHTML = '<option value="">Select pressure level</option>';
+                    result.pressure_levels.forEach(level => {
+                        const option = document.createElement('option');
+                        option.value = level;
+                        option.textContent = result.common_levels[level] || `${level} mb`;
+                        pressureLevelSelect.appendChild(option);
+                    });
+                } else {
+                    pressureLevelSelect.innerHTML = '<option value="">Error loading levels</option>';
+                    console.error('Error loading pressure levels:', result.error);
+                }
+            } catch (error) {
+                pressureLevelSelect.innerHTML = '<option value="">Error loading levels</option>';
+                console.error('Error loading pressure levels:', error);
+            }
+        }
+
+        // Load filtered variables based on data source
+        async function loadFilteredVariables() {
+            const date = document.getElementById('date').value;
+            const hour = document.getElementById('hour').value;
+            const dataSource = document.getElementById('data_source').value;
+            const variableSelect = document.getElementById('variable');
+            
+            if (!date) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/get_filtered_variables', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date, hour: parseInt(hour), data_source: dataSource })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    const currentValue = variableSelect.value;
+                    variableSelect.innerHTML = '';
+                    
+                    Object.entries(result.variables).forEach(([key, description]) => {
+                        const option = document.createElement('option');
+                        option.value = key;
+                        option.textContent = description;
+                        variableSelect.appendChild(option);
+                    });
+                    
+                    // Restore previous selection if available
+                    if (currentValue && result.variables[currentValue]) {
+                        variableSelect.value = currentValue;
+                    }
+                } else {
+                    console.error('Error loading filtered variables:', result.error);
+                }
+            } catch (error) {
+                console.error('Error loading filtered variables:', error);
+            }
+        }
+
+        // Load variables for specific pressure level
+        async function loadVariablesForPressureLevel() {
+            const date = document.getElementById('date').value;
+            const hour = document.getElementById('hour').value;
+            const dataSource = document.getElementById('data_source').value;
+            const pressureLevel = document.getElementById('pressure_level').value;
+            const variableSelect = document.getElementById('variable');
+            
+            if (!date || !pressureLevel) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/get_variables_for_pressure_level', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        date, 
+                        hour: parseInt(hour), 
+                        data_source: dataSource,
+                        pressure_level: parseInt(pressureLevel)
+                    })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    const currentValue = variableSelect.value;
+                    variableSelect.innerHTML = '';
+                    
+                    Object.entries(result.variables).forEach(([key, description]) => {
+                        const option = document.createElement('option');
+                        option.value = key;
+                        option.textContent = description;
+                        variableSelect.appendChild(option);
+                    });
+                    
+                    // Restore previous selection if available
+                    if (currentValue && result.variables[currentValue]) {
+                        variableSelect.value = currentValue;
+                    } else if (Object.keys(result.variables).length > 0) {
+                        // Select first available variable if previous selection not available
+                        variableSelect.value = Object.keys(result.variables)[0];
+                    }
+                } else {
+                    console.error('Error loading variables for pressure level:', result.error);
+                }
+            } catch (error) {
+                console.error('Error loading variables for pressure level:', error);
+            }
+        }
 
         // Status display
         function showStatus(message, type) {
@@ -237,30 +543,42 @@
             }
         }
 
-        // Form submission
-        document.getElementById('weatherForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
+        // Generate weather map
+        async function generateMap() {
             const date = document.getElementById('date').value;
             const hour = document.getElementById('hour').value;
+            const variable = document.getElementById('variable').value;
+            const data_source = document.getElementById('data_source').value;
+            const pressure_level = document.getElementById('pressure_level').value || null;
             
             if (!date) {
                 showStatus('Please select a date.', 'error');
                 return;
             }
             
+            // Check if pressure level is required for pressure-enabled data sources
+            if (data_source === '3DRTMA' && !pressure_level) {
+                showStatus('Please select a pressure level.', 'error');
+                return;
+            }
+            
             // Show loading
             document.getElementById('loading').style.display = 'block';
-            document.getElementById('mapContainer').style.display = 'none';
+            document.getElementById('mapContainer').classList.add('hidden');
             hideStatus();
             
             try {
+                const requestBody = { date, hour: parseInt(hour), variable, data_source };
+                if (pressure_level) {
+                    requestBody.pressure_level = parseInt(pressure_level);
+                }
+                
                 const response = await fetch('/generate_map', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ date, hour: parseInt(hour) })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const result = await response.json();
@@ -269,8 +587,9 @@
                 
                 if (result.success) {
                     showStatus(result.message, 'success');
-                    document.getElementById('mapFrame').src = result.map_url;
-                    document.getElementById('mapContainer').style.display = 'block';
+                    const mapFrame = document.getElementById('mapFrame');
+                    mapFrame.src = result.map_url;
+                    document.getElementById('mapContainer').classList.remove('hidden');
                 } else {
                     showStatus(result.error, 'error');
                 }
@@ -278,6 +597,12 @@
                 document.getElementById('loading').style.display = 'none';
                 showStatus('Error generating map: ' + error.message, 'error');
             }
+        }
+
+        // Initialize drag functionality and filtered variables on page load
+        window.addEventListener('load', function() {
+            initializeDragFunctionality();
+            loadFilteredVariables();
         });
     </script>
 </body>

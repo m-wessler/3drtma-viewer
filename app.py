@@ -36,6 +36,12 @@ AVAILABLE_VARIABLES = {
 # Path to the weather script
 WEATHER_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), 'test.py')
 
+# Available data sources
+DATA_SOURCES = {
+    'RTMA': 'RTMA 2.5km Surface',
+    '3DRTMA': '3D-RTMA Pressure Levels'
+}
+
 @app.route('/')
 def index():
     today = datetime.now()
@@ -43,6 +49,7 @@ def index():
     
     return render_template('index.html', 
                          variables=AVAILABLE_VARIABLES,
+                         data_sources=DATA_SOURCES,
                          default_date=yesterday.strftime('%Y-%m-%d'),
                          today=today.strftime('%Y-%m-%d'))
 
@@ -54,6 +61,8 @@ def generate_map():
         date_str = data.get('date')
         hour = int(data.get('hour', 12))
         variable = data.get('variable', 'TMP')  # Default to temperature
+        data_source = data.get('data_source', 'RTMA')  # Default to RTMA
+        pressure_level = data.get('pressure_level')  # Optional pressure level for 3DRTMA
         
         if not date_str:
             return jsonify({'error': 'Date is required'}), 400
@@ -66,16 +75,16 @@ def generate_map():
             return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
         
         # Create output file in static directory
-        output_filename = f'weather_map_{date_formatted}_{hour:02d}Z.html'
+        output_filename = f'weather_map_{data_source}_{date_formatted}_{hour:02d}Z.html'
         static_dir = os.path.join(app.root_path, 'static', 'maps')
         os.makedirs(static_dir, exist_ok=True)
         output_path = os.path.join(static_dir, output_filename)
         
-        logger.info(f'Generating weather map for {date_formatted} {hour:02d}Z')
+        logger.info(f'Generating weather map for {date_formatted} {hour:02d}Z using {data_source}')
         
-        # Use the new single variable approach
+        # Use the new single variable approach with data source
         success = weather_generator.create_single_variable_weather_map(
-            date_formatted, hour, output_path, variable
+            date_formatted, hour, output_path, variable, data_source, pressure_level
         )
         
         if success:
@@ -85,10 +94,12 @@ def generate_map():
                 'date': date_str,
                 'hour': hour,
                 'variable': variable,
+                'data_source': data_source,
                 'message': 'Weather map generated successfully!'
             })
         else:
-            return jsonify({'error': 'Failed to generate weather map'}), 500
+            error_msg = 'Failed to generate weather map'
+            return jsonify({'error': error_msg}), 500
             
     except Exception as e:
         logger.error(f'Error generating map: {str(e)}')
@@ -102,8 +113,10 @@ def get_variable_data():
         date_str = data.get('date')
         hour = int(data.get('hour', 12))
         variable = data.get('variable')
+        data_source = data.get('data_source', 'RTMA')  # Default to RTMA
+        pressure_level = data.get('pressure_level')  # Optional pressure level for 3DRTMA
         
-        logger.info(f'Received AJAX request: date={date_str}, hour={hour}, variable={variable}')
+        logger.info(f'Received AJAX request: date={date_str}, hour={hour}, variable={variable}, source={data_source}')
         
         if not all([date_str, variable]):
             return jsonify({'error': 'Date and variable are required'}), 400
@@ -124,10 +137,10 @@ def get_variable_data():
             logger.error(f'Invalid date format: {date_str}, error: {e}')
             return jsonify({'error': f'Invalid date format: {date_str}. Use YYYY-MM-DD or YYYYMMDD'}), 400
         
-        logger.info(f'Getting variable data for {variable} at {date_formatted} {hour:02d}Z')
+        logger.info(f'Getting variable data for {variable} at {date_formatted} {hour:02d}Z using {data_source}')
         
         # Get variable data
-        result = weather_generator.get_variable_data_json(date_formatted, hour, variable)
+        result = weather_generator.get_variable_data_json(date_formatted, hour, variable, data_source, pressure_level)
         
         logger.info(f'Variable data result: success={result.get("success", False)}')
         
@@ -195,6 +208,132 @@ def debug_info():
         return jsonify(info)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/get_pressure_levels', methods=['POST'])
+def get_pressure_levels():
+    """Get available pressure levels for 3DRTMA data."""
+    try:
+        data = request.get_json()
+        date_str = data.get('date')
+        hour = int(data.get('hour', 12))
+        data_source = data.get('data_source', 'RTMA')
+        
+        if not date_str:
+            return jsonify({'error': 'Date is required'}), 400
+        
+        # Parse date
+        try:
+            if len(date_str) == 8 and date_str.isdigit():
+                date_formatted = date_str
+            else:
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                date_formatted = date_obj.strftime('%Y%m%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format'}), 400
+        
+        # Get pressure levels
+        pressure_levels = weather_generator.get_available_pressure_levels(date_formatted, hour, data_source)
+        
+        return jsonify({
+            'success': True,
+            'pressure_levels': pressure_levels,
+            'common_levels': weather_generator.config.COMMON_PRESSURE_LEVELS
+        })
+        
+    except Exception as e:
+        logger.error(f'Error getting pressure levels: {str(e)}', exc_info=True)
+        return jsonify({'error': f'Error getting pressure levels: {str(e)}'}), 500
+
+@app.route('/get_filtered_variables', methods=['POST'])
+def get_filtered_variables():
+    """Get available variables filtered for the selected data source."""
+    try:
+        data = request.get_json()
+        date_str = data.get('date')
+        hour = int(data.get('hour', 12))
+        data_source = data.get('data_source', 'RTMA')
+        
+        if not date_str:
+            return jsonify({'error': 'Date is required'}), 400
+        
+        # Parse date
+        try:
+            if len(date_str) == 8 and date_str.isdigit():
+                date_formatted = date_str
+            else:
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                date_formatted = date_obj.strftime('%Y%m%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format'}), 400
+        
+        # Get filtered variables
+        variables = weather_generator.get_filtered_variables(date_formatted, hour, data_source)
+        
+        # Create variables with descriptions
+        variables_with_desc = {}
+        for var in variables:
+            if var in weather_generator.config.VARIABLE_INFO:
+                var_info = weather_generator.config.VARIABLE_INFO[var]
+                variables_with_desc[var] = f"{var_info['name']} ({var_info['units']})"
+            elif var in AVAILABLE_VARIABLES:
+                variables_with_desc[var] = AVAILABLE_VARIABLES[var]
+            else:
+                variables_with_desc[var] = var
+        
+        return jsonify({
+            'success': True,
+            'variables': variables_with_desc
+        })
+        
+    except Exception as e:
+        logger.error(f'Error getting filtered variables: {str(e)}', exc_info=True)
+        return jsonify({'error': f'Error getting filtered variables: {str(e)}'}), 500
+
+@app.route('/get_variables_for_pressure_level', methods=['POST'])
+def get_variables_for_pressure_level():
+    """Get available variables for a specific pressure level in 3DRTMA data."""
+    try:
+        data = request.get_json()
+        date_str = data.get('date')
+        hour = int(data.get('hour', 12))
+        data_source = data.get('data_source', 'RTMA')
+        pressure_level = data.get('pressure_level')
+        
+        if not all([date_str, pressure_level is not None]):
+            return jsonify({'error': 'Date and pressure level are required'}), 400
+        
+        # Parse date
+        try:
+            if len(date_str) == 8 and date_str.isdigit():
+                date_formatted = date_str
+            else:
+                date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                date_formatted = date_obj.strftime('%Y%m%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid date format'}), 400
+        
+        # Get variables for specific pressure level
+        variables = weather_generator.get_variables_for_pressure_level(date_formatted, hour, data_source, int(pressure_level))
+        
+        # Create variables with descriptions
+        variables_with_desc = {}
+        for var in variables:
+            if var in weather_generator.config.VARIABLE_INFO:
+                var_info = weather_generator.config.VARIABLE_INFO[var]
+                variables_with_desc[var] = f"{var_info['name']} ({var_info['units']})"
+            elif var in AVAILABLE_VARIABLES:
+                variables_with_desc[var] = AVAILABLE_VARIABLES[var]
+            else:
+                variables_with_desc[var] = var
+        
+        return jsonify({
+            'success': True,
+            'variables': variables_with_desc
+        })
+        
+    except Exception as e:
+        logger.error(f'Error getting variables for pressure level: {str(e)}', exc_info=True)
+        return jsonify({'error': f'Error getting variables for pressure level: {str(e)}'}), 500
 
 if __name__ == '__main__':
     # Create necessary directories
