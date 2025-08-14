@@ -1,0 +1,10 @@
+flask>=2.0
+requests
+xarray
+cfgrib
+numpy
+pandas
+folium
+matplotlib
+Pillow
+pytest

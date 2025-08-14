@@ -135,6 +135,11 @@ class WeatherMapConfig:
     # Figure settings
     FIGURE_SIZE = (12, 8)
     FIGURE_DPI = 150
+    
+    # Tunable behavior: whether folium-generated maps should inject their own
+    # control panels. Set to False when embedding maps in an outer UI that
+    # provides controls (the preferred lightweight approach).
+    INJECT_FOLIUM_CONTROL_PANEL = False
 
 
 class GRIBDataProcessor:
@@ -619,6 +624,8 @@ class WeatherMapRenderer:
                                available_variables: List[str],
                                date: str, hour: int, data_source: str = 'RTMA') -> None:
         """Add interactive control panel with AJAX variable switching."""
+        if not getattr(self.config, 'INJECT_FOLIUM_CONTROL_PANEL', False):
+            return
         
         # Create dropdown options
         dropdown_options = ""
@@ -941,6 +948,8 @@ class WeatherMapRenderer:
     
     def _add_opacity_control(self, m: folium.Map) -> None:
         """Add simple opacity control to map."""
+        if not getattr(self.config, 'INJECT_FOLIUM_CONTROL_PANEL', False):
+            return
         
         # Simple opacity control panel HTML
         opacity_control_html = f'''
@@ -998,6 +1007,8 @@ class WeatherMapRenderer:
     
     def _add_control_panel(self, m: folium.Map, all_data: Dict[str, Any], 
                           variable_info_json: Dict[str, Any], first_var: str) -> None:
+        if not getattr(self.config, 'INJECT_FOLIUM_CONTROL_PANEL', False):
+            return
         """Add interactive control panel to map."""
         
         # Create dropdown options

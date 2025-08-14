@@ -568,7 +568,12 @@
             hideStatus();
             
             try {
-                const requestBody = { date, hour: parseInt(hour), variable, data_source };
+                // Convert date to YYYYMMDD before sending
+                let dateToSend = date;
+                if (dateToSend && dateToSend.includes('-')) {
+                    dateToSend = dateToSend.replace(/-/g, '');
+                }
+                const requestBody = { date: dateToSend, hour: parseInt(hour), variable, data_source };
                 if (pressure_level) {
                     requestBody.pressure_level = parseInt(pressure_level);
                 }
