@@ -278,6 +278,11 @@
                 
                 <button type="button" class="btn btn-secondary" onclick="checkAvailability()">Check Data</button>
                 <button type="button" class="btn btn-primary" onclick="generateMap()">Generate Map</button>
+            
+                <div style="margin-top:12px;">
+                    <label for="globalOpacity" style="display:block;font-weight:600;margin-bottom:6px">Overlay Opacity: <span id="globalOpacityValue">60%</span></label>
+                    <input id="globalOpacity" type="range" min="0" max="100" value="60" oninput="setOverlayOpacity(this.value)" style="width:100%">
+                </div>
             </form>
             
             <div id="status" class="status"></div>
@@ -291,7 +296,9 @@
 
     <!-- Full Screen Map Container -->
     <div id="mapContainer" class="map-container hidden">
-        <iframe id="mapFrame" src=""></iframe>
+    <iframe id="mapFrame" src="" style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;"></iframe>
+    <!-- inlineMap is used for virtual-difference overlays so parent can control opacity reliably -->
+    <div id="inlineMap" style="position:absolute;top:0;left:0;width:100%;height:100%;display:none;z-index:2;"></div>
     </div>
 
     <script>
@@ -611,26 +618,85 @@
                     // Build a small Leaflet HTML page and set iframe.srcdoc
                     const bounds = result.bounds; // [[south, west], [north, east]]
                     const imgRef = result.image_url ? result.image_url : ('data:image/png;base64,' + (result.image_data || ''));
-                    const leafletHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-                        <title>Difference Overlay</title>
-                        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-                        <style>html,body,#map{height:100%;margin:0;padding:0}</style>
-                        </head><body><div id="map"></div>
-                        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>
-                        <script>
-                        const map = L.map('map').fitBounds(${JSON.stringify(bounds)});
-                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM'}).addTo(map);
-                        const img = ${JSON.stringify(imgRef)};
-                        const boundsArr = ${JSON.stringify(bounds)};
-                        const overlay = L.imageOverlay(img, boundsArr, {opacity:0.8}).addTo(map);
-                        L.control.scale().addTo(map);
-                        <\/script><\/body></html>`;
+                    // Instead of rendering the overlay inside an iframe, create an
+                    // inline Leaflet map in the parent document so we can control
+                    // the overlay opacity reliably from the parent UI.
+                    try {
+                        // Ensure leaflet assets are available in parent
+                        if (typeof L === 'undefined') {
+                            // Dynamically load Leaflet CSS and JS
+                            const css = document.createElement('link');
+                            css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                            document.head.appendChild(css);
+                            await new Promise((res, rej) => {
+                                const s = document.createElement('script');
+                                s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                                s.onload = res; s.onerror = rej; document.body.appendChild(s);
+                            });
+                        }
 
-                    const mapFrame = document.getElementById('mapFrame');
-                    mapFrame.srcdoc = leafletHtml;
-                    document.getElementById('mapContainer').classList.remove('hidden');
-                    showStatus('Difference overlay ready', 'success');
-                    return;
+                        const boundsArr = bounds;
+                        const img = imgRef;
+
+                        // Show map container and inline map; hide iframe when using inline mode
+                        const mapFrame = document.getElementById('mapFrame');
+                        const inlineDiv = document.getElementById('inlineMap');
+                        if (mapFrame) mapFrame.style.display = 'none';
+                        inlineDiv.style.display = 'block';
+                        document.getElementById('mapContainer').classList.remove('hidden');
+
+                        // Clean up existing inline map if any
+                        if (window.inlineMap) {
+                            try { window.inlineMap.remove(); } catch(e) {}
+                            window.inlineMap = null; window.inlineOverlay = null;
+                        }
+
+                        const map = L.map('inlineMap').fitBounds(boundsArr);
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'OSM'}).addTo(map);
+                        const currentOpacity = (document.getElementById('globalOpacity') ? document.getElementById('globalOpacity').value/100 : 0.6);
+                        const overlay = L.imageOverlay(img, boundsArr, {opacity: currentOpacity}).addTo(map);
+                        L.control.scale().addTo(map);
+
+                        // Expose for parent controls
+                        window.inlineMap = map;
+                        window.inlineOverlay = overlay;
+
+                        // Click handler to call sample_point and show popup
+                        map.on('click', async function(e) {
+                            try {
+                                const lat = e.latlng.lat;
+                                const lon = e.latlng.lng;
+                                const parentDoc = document; // we're in parent already
+                                const resp = await fetch('/sample_point', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ lat, lon, date: (parentDoc.getElementById('date') ? parentDoc.getElementById('date').value.replace(/-/g,'') : ''), hour: parseInt(parentDoc.getElementById('hour') ? parentDoc.getElementById('hour').value : 0), variable: (parentDoc.getElementById('variable') ? parentDoc.getElementById('variable').value : ''), data_source: (parentDoc.getElementById('data_source') ? parentDoc.getElementById('data_source').value : ''), pressure_level: (parentDoc.getElementById('pressure_level') ? parentDoc.getElementById('pressure_level').value : null) })
+                                });
+                                const data = await resp.json();
+                                let content = '';
+                                if (data.success) {
+                                    const parts = [];
+                                    if (data.location_name) parts.push(data.location_name);
+                                    if (data.requested_lat !== undefined && data.requested_lon !== undefined) parts.push('Requested: ' + data.requested_lat.toFixed(4) + ', ' + data.requested_lon.toFixed(4));
+                                    if (data.grid_lat !== undefined && data.grid_lon !== undefined) parts.push('Grid: ' + data.grid_lat.toFixed(4) + ', ' + data.grid_lon.toFixed(4));
+                                    parts.push(String(data.value) + ' ' + (data.units || ''));
+                                    content = parts.join('<br>');
+                                } else {
+                                    content = 'Error: ' + (data.error || '');
+                                }
+                                L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+                            } catch (err) {
+                                L.popup().setLatLng(e.latlng).setContent('Error sampling: ' + err.message).openOn(map);
+                            }
+                        });
+
+                        showStatus('Difference overlay ready', 'success');
+                        return;
+                    } catch (err) {
+                        console.error('Failed to create inline difference map', err);
+                        showStatus('Failed to create inline map: ' + err.message, 'error');
+                        return;
+                    }
                 }
 
                 const requestBody = { date: dateToSend, hour: parseInt(hour), variable, data_source };
@@ -653,8 +719,23 @@
                 if (result.success) {
                     showStatus(result.message, 'success');
                     const mapFrame = document.getElementById('mapFrame');
-                    mapFrame.src = result.map_url;
-                    document.getElementById('mapContainer').classList.remove('hidden');
+                    // Hide inlineMap if present
+                    const inlineDiv = document.getElementById('inlineMap');
+                    if (inlineDiv) inlineDiv.style.display = 'none';
+
+                    // Load folium-generated map into iframe.src (more robust than fetching HTML)
+                    try {
+                        mapFrame.src = result.map_url;
+                        document.getElementById('mapContainer').classList.remove('hidden');
+
+                        // When iframe loads, attempt to set overlay opacity
+                        mapFrame.onload = function() {
+                            try { setOverlayOpacity(document.getElementById('globalOpacity').value); } catch(e) {}
+                        };
+                    } catch (e) {
+                        console.warn('Failed to set iframe src for map:', e);
+                        showStatus('Failed to load generated map: ' + e.message, 'error');
+                    }
                 } else {
                     showStatus(result.error, 'error');
                 }
@@ -741,6 +822,128 @@
             // Find latest available RTMA timestamp and auto-generate map
             findLatestAndGenerate();
         });
+        
+        // Set overlay opacity globally (for iframe/srcdoc maps and folium maps)
+        function setOverlayOpacity(value) {
+            const pct = Number(value);
+            const label = document.getElementById('globalOpacityValue');
+            if (label) label.textContent = pct + '%';
+            const frac = pct / 100;
+
+            console.log('setOverlayOpacity called:', pct);
+
+            // 1) Inline overlay (created for virtual-diff)
+            try {
+                if (window.inlineOverlay && typeof window.inlineOverlay.setOpacity === 'function') {
+                    window.inlineOverlay.setOpacity(frac);
+                    console.log('setOverlayOpacity: used window.inlineOverlay');
+                    return;
+                }
+            } catch (e) { console.warn('inlineOverlay error', e); }
+
+            // 2) Try iframe contentWindow heuristics
+            try {
+                const mapFrame = document.getElementById('mapFrame');
+                if (mapFrame && mapFrame.contentWindow) {
+                    const cw = mapFrame.contentWindow;
+
+                    // prefer explicit overlay refs
+                    try {
+                        if (cw._overlay && typeof cw._overlay.setOpacity === 'function') {
+                            cw._overlay.setOpacity(frac);
+                            console.log('setOverlayOpacity: used cw._overlay');
+                            return;
+                        }
+                    } catch(e) { console.warn('cw._overlay access error', e); }
+
+                    // search for variables like image_overlay_* or layer_control_*_layers (folium emits these)
+                    try {
+                        for (const k of Object.keys(cw)) {
+                            if (k.startsWith('image_overlay_') || k === 'weather_overlay') {
+                                try {
+                                    const obj = cw[k];
+                                    if (obj && typeof obj.setOpacity === 'function') {
+                                        obj.setOpacity(frac);
+                                        console.log('setOverlayOpacity: used cw.'+k);
+                                        return;
+                                    }
+                                } catch (ee) { /* ignore per-object errors */ }
+                            }
+                            // folium creates a helper object named like layer_control_<id>_layers
+                            if (k.endsWith('_layers')) {
+                                try {
+                                    const layersObj = cw[k];
+                                    if (layersObj && layersObj.overlays) {
+                                        for (const ovKey of Object.keys(layersObj.overlays)) {
+                                            try {
+                                                const ov = layersObj.overlays[ovKey];
+                                                if (ov && typeof ov.setOpacity === 'function') {
+                                                    ov.setOpacity(frac);
+                                                    console.log('setOverlayOpacity: used overlay from '+k+' key='+ovKey);
+                                                    return;
+                                                }
+                                                // if overlay is an image element inside overlay pane, try DOM
+                                            } catch (ee) {}
+                                        }
+                                    }
+                                } catch (ee) { /* ignore */ }
+                            }
+                        }
+                    } catch(e) { console.warn('iterate cw keys error', e); }
+
+                    // fallback: modify image elements inside iframe DOM
+                    try {
+                        const doc = mapFrame.contentDocument || cw.document;
+                        if (doc) {
+                            const imgs = doc.querySelectorAll('.leaflet-image-layer img, .leaflet-overlay-pane img');
+                            if (imgs && imgs.length > 0) {
+                                imgs.forEach(img => { img.style.opacity = frac; });
+                                console.log('setOverlayOpacity: modified iframe DOM imgs count=', imgs.length);
+                                return;
+                            }
+                        }
+                    } catch(e) { console.warn('iframe DOM imgs error', e); }
+
+                    // fallback: call eachLayer on iframe map
+                    try {
+                        if (cw.map && typeof cw.map.eachLayer === 'function') {
+                            cw.map.eachLayer(function(layer) { try { if (layer.setOpacity) layer.setOpacity(frac); } catch(e) {} });
+                            console.log('setOverlayOpacity: used cw.map.eachLayer');
+                            return;
+                        }
+                    } catch(e) { console.warn('cw.map.eachLayer error', e); }
+                }
+            } catch (e) { console.warn('iframe heuristics error', e); }
+
+            // 3) Parent DOM image modification (for folium maps rendered in parent)
+            try {
+                const imgs = document.querySelectorAll('.leaflet-image-layer img, .leaflet-overlay-pane img');
+                if (imgs && imgs.length > 0) {
+                    imgs.forEach(img => { img.style.opacity = frac; });
+                    console.log('setOverlayOpacity: modified parent DOM imgs count=', imgs.length);
+                    return;
+                }
+            } catch (e) { console.warn('parent imgs error', e); }
+
+            // 4) Legacy: iterate candidate window maps
+            try {
+                var candidateMaps = [];
+                for (const k of Object.keys(window)) {
+                    if (k.startsWith('map_') || k.startsWith('Map') || k === 'map') candidateMaps.push(window[k]);
+                }
+                let did = false;
+                for (const m of candidateMaps) {
+                    try {
+                        if (m && typeof m.eachLayer === 'function') {
+                            m.eachLayer(function(layer) { try { if (layer.setOpacity) { layer.setOpacity(frac); did = true; } } catch(e) {} });
+                        }
+                    } catch (e) {}
+                }
+                if (did) { console.log('setOverlayOpacity: used candidate window maps'); return; }
+            } catch (e) { console.warn('candidate window maps error', e); }
+
+            console.log('setOverlayOpacity: no overlays found to modify');
+        }
     </script>
 </body>
 </html>

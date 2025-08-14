@@ -11,6 +11,7 @@ import requests
 import re
 import numpy as np
 import base64
+from urllib.parse import urlencode
 
 # Lazy import of WeatherMapGenerator to avoid heavy imports at module import time
 
@@ -414,6 +415,227 @@ def get_pressure_levels():
     except Exception as e:
         logger.error(f'Error getting pressure levels: {str(e)}', exc_info=True)
         return jsonify({'error': f'Error getting pressure levels: {str(e)}'}), 500
+
+
+@app.route('/sample_point', methods=['POST'])
+def sample_point():
+    """Sample the data value at a given lat/lon for the selected variable and data source.
+
+    Expects JSON: { lat, lon, date, hour, variable, data_source, pressure_level }
+    """
+    try:
+        data = request.get_json()
+        logger.debug(f'/sample_point payload: {data}')
+
+        # Diagnostic logging (best-effort)
+        try:
+            logs_dir = os.path.join(app.root_path, 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+            diag_path = os.path.join(logs_dir, 'sample_point_calls.log')
+            with open(diag_path, 'a', encoding='utf8') as df:
+                df.write(json.dumps({'time': datetime.utcnow().isoformat(), 'payload': data}) + '\n')
+        except Exception:
+            # Don't let diagnostic logging break the endpoint
+            pass
+
+        lat = float(data.get('lat'))
+        lon = float(data.get('lon'))
+        date_str = data.get('date')
+        hour = int(data.get('hour', 12))
+        variable = data.get('variable')
+        data_source = data.get('data_source', 'RTMA')
+        pressure_level = data.get('pressure_level')
+
+        if not all([date_str, variable]):
+            return jsonify({'success': False, 'error': 'date and variable are required'}), 400
+
+        try:
+            date_formatted = date_to_yyyymmdd(date_str)
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid date format'}), 400
+
+        wg = get_weather_generator()
+
+        # For virtual dataset, compute diff and sample
+        if data_source in ('3DRTMA_minus_RTMA', '3DRTMA minus RTMA', '3DRTMA-RTMA'):
+            comps = compute_comparable_grids(date_formatted, hour)
+            match = next((c for c in comps.get('comparisons', []) if c.get('variable') == variable), None)
+            if not match or not match.get('best_match_3d_level'):
+                return jsonify({'success': False, 'error': f'No comparable 3DRTMA level for {variable}'}), 400
+            best_level = match['best_match_3d_level']
+
+            grib3, idx3 = wg.generate_urls(date_formatted, hour, '3DRTMA')
+            var3, coords3 = wg.processor.load_single_variable(grib3, idx3, variable, best_level)
+            if var3 is None or coords3 is None:
+                return jsonify({'success': False, 'error': 'Failed to load 3DRTMA data'}), 500
+
+            gribr, idxr = wg.generate_urls(date_formatted, hour, 'RTMA')
+            varr, coordsr = wg.processor.load_single_variable(gribr, idxr, variable, None)
+            if varr is None or coordsr is None:
+                return jsonify({'success': False, 'error': 'Failed to load RTMA data'}), 500
+
+            data3 = np.array(var3['data'])
+            datar = np.array(varr['data'])
+
+            # nearest-neighbor resample of RTMA to 3D grid if needed
+            def resample_to_grid(src_data, src_lat, src_lon, tgt_lat, tgt_lon):
+                try:
+                    src_lats = np.unique(src_lat[:,0])
+                    src_lons = np.unique(src_lon[0,:])
+                except Exception:
+                    src_lats = np.unique(src_lat.flatten())
+                    src_lons = np.unique(src_lon.flatten())
+
+                tgt_shape = tgt_lat.shape
+                res = np.full(tgt_shape, np.nan, dtype=float)
+                for ii in range(tgt_shape[0]):
+                    lat_val = tgt_lat[ii,0]
+                    lat_idx = int(np.argmin(np.abs(src_lats - lat_val)))
+                    for jj in range(tgt_shape[1]):
+                        lon_val = tgt_lon[0,jj]
+                        lon_idx = int(np.argmin(np.abs(src_lons - lon_val)))
+                        try:
+                            res[ii,jj] = src_data[lat_idx, lon_idx]
+                        except Exception:
+                            res[ii,jj] = np.nan
+                return res
+
+            if datar.shape != data3.shape:
+                datar_resampled = resample_to_grid(datar, coordsr['lat_grid'], coordsr['lon_grid'], coords3['lat_grid'], coords3['lon_grid'])
+            else:
+                datar_resampled = datar
+
+            diff = data3 - datar_resampled
+
+            # Find nearest grid point in coords3 to requested lat/lon
+            lat_grid = coords3['lat_grid']
+            lon_grid = coords3['lon_grid']
+            flat_lats = lat_grid[:,0]
+            flat_lons = lon_grid[0,:]
+            i = int(np.argmin(np.abs(flat_lats - lat)))
+            j = int(np.argmin(np.abs(flat_lons - lon)))
+            sampled = float(diff[i, j]) if np.isfinite(diff[i, j]) else None
+
+            # Determine units: prefer the loaded variable's info; fall back to generator config VARIABLE_INFO
+            units = ''
+            try:
+                if isinstance(var3, dict):
+                    units = var3.get('info', {}).get('units', '') or ''
+            except Exception:
+                units = ''
+            if not units and hasattr(wg, 'config'):
+                units = getattr(wg.config, 'VARIABLE_INFO', {}).get(variable, {}).get('units', '')
+
+            # Grid cell lat/lon for the sampled i,j
+            try:
+                grid_lat = float(coords3['lat_grid'][i, j])
+                grid_lon = float(coords3['lon_grid'][i, j])
+            except Exception:
+                # fall back to row/col selection
+                grid_lat = float(coords3['lat_grid'][i, 0])
+                grid_lon = float(coords3['lon_grid'][0, j])
+
+            # Reverse geocode (best-effort, short timeout)
+            location_name = ''
+            try:
+                nom_url = 'https://nominatim.openstreetmap.org/reverse'
+                params = {'format': 'jsonv2', 'lat': grid_lat, 'lon': grid_lon}
+                headers = {'User-Agent': '3drtma-viewer/1.0 (github:m-wessler)'}
+                r = requests.get(nom_url, params=params, headers=headers, timeout=5)
+                if r.status_code == 200:
+                    jr = r.json()
+                    location_name = jr.get('display_name', '')
+            except Exception:
+                location_name = ''
+
+            return jsonify({
+                'success': True,
+                'value': sampled,
+                'units': units or '',
+                'grid_i': int(i),
+                'grid_j': int(j),
+                'requested_lat': lat,
+                'requested_lon': lon,
+                'grid_lat': grid_lat,
+                'grid_lon': grid_lon,
+                'location_name': location_name
+            })
+
+        # Non-virtual: load single variable and sample
+        if data_source == 'RTMA':
+            pressure_level = None
+        else:
+            if pressure_level is not None and pressure_level != '':
+                try:
+                    pressure_level = int(pressure_level)
+                except Exception:
+                    return jsonify({'success': False, 'error': 'Invalid pressure_level'}), 400
+
+        grib, idx = wg.generate_urls(date_formatted, hour, data_source)
+        var, coords = wg.processor.load_single_variable(grib, idx, variable, pressure_level)
+        if var is None or coords is None:
+            return jsonify({'success': False, 'error': 'Failed to load variable data'}), 500
+
+        data_arr = np.array(var['data'])
+        lat_grid = coords['lat_grid']
+        lon_grid = coords['lon_grid']
+        flat_lats = lat_grid[:,0]
+        flat_lons = lon_grid[0,:]
+        i = int(np.argmin(np.abs(flat_lats - lat)))
+        j = int(np.argmin(np.abs(flat_lons - lon)))
+        sampled = float(data_arr[i, j]) if np.isfinite(data_arr[i, j]) else None
+
+        # Determine units
+        units = ''
+        try:
+            if isinstance(var, dict):
+                units = var.get('units') or var.get('info', {}).get('units') or ''
+        except Exception:
+            units = ''
+        if not units and hasattr(wg, 'config'):
+            units = getattr(wg.config, 'VARIABLE_INFO', {}).get(variable, {}).get('units', '')
+
+        # Compute grid cell coordinates and optional reverse geocode (best-effort)
+        try:
+            grid_lat = float(lat_grid[i])
+            grid_lon = float(lon_grid[j])
+        except Exception:
+            try:
+                grid_lat = float(lat_grid[i, 0])
+                grid_lon = float(lon_grid[0, j])
+            except Exception:
+                grid_lat = None
+                grid_lon = None
+
+        location_name = ''
+        if grid_lat is not None and grid_lon is not None:
+            try:
+                nom_url = 'https://nominatim.openstreetmap.org/reverse'
+                params = {'format': 'jsonv2', 'lat': grid_lat, 'lon': grid_lon}
+                headers = {'User-Agent': '3drtma-viewer/1.0 (github:m-wessler)'}
+                r = requests.get(nom_url, params=params, headers=headers, timeout=5)
+                if r.status_code == 200:
+                    jr = r.json()
+                    location_name = jr.get('display_name', '')
+            except Exception:
+                location_name = ''
+
+        return jsonify({
+            'success': True,
+            'value': sampled,
+            'units': units or '',
+            'grid_i': int(i),
+            'grid_j': int(j),
+            'requested_lat': lat,
+            'requested_lon': lon,
+            'grid_lat': grid_lat,
+            'grid_lon': grid_lon,
+            'location_name': location_name
+        })
+
+    except Exception as e:
+        logger.error(f'Error sampling point: {e}', exc_info=True)
+        return jsonify({'success': False, 'error': f'Error sampling point: {str(e)}'}), 500
 
 
 def _parse_grib_index(idx_url: str):

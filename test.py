@@ -255,9 +255,20 @@ class GRIBDataProcessor:
         
         try:
             logger.info(f"Downloading {variable_name} data...")
-            
+
             # Download the specific record
-            grib_data = self.download_grib_subset(grib_url, target_record['byte_start'], target_record['byte_end'])
+            try:
+                grib_data = self.download_grib_subset(grib_url, target_record['byte_start'], target_record['byte_end'])
+            except Exception as e_sub:
+                logger.warning(f'Byte-range download failed ({e_sub}), attempting full-file download as fallback')
+                try:
+                    # Download full file as a fallback
+                    resp = self.session.get(grib_url, timeout=120)
+                    resp.raise_for_status()
+                    grib_data = resp.content
+                except Exception as e_full:
+                    logger.error(f'Full file download failed: {e_full}')
+                    raise
             
             # Process with temporary file
             with tempfile.NamedTemporaryFile(suffix='.grb2', delete=False) as temp_file:
@@ -512,6 +523,40 @@ class WeatherMapRenderer:
         
         # Add layer control
         folium.LayerControl().add_to(m)
+
+        # Inject a small sampling script so clicks on the folium map will POST to /sample_point
+        try:
+            sampling_js = (
+                "<script>"
+                "(function(){"
+                "  var mapName = '" + m.get_name() + "';"
+                "  var attempts = 0;"
+                "  var maxAttempts = 40;"  # ~10s if interval 250ms
+                "  var iv = setInterval(function(){"
+                "    attempts++;"
+                "    var map = window[mapName];"
+                "    if(map && map.on){"
+                "      clearInterval(iv);"
+                "      map.on('click', function(e){"
+                "        var lat = e.latlng.lat; var lon = e.latlng.lng;"
+                "        var parentDoc = (window.parent && window.parent.document) ? window.parent.document : document;"
+                "        var date = parentDoc.getElementById('date') ? parentDoc.getElementById('date').value.replace(/-/g,'') : '';"
+                "        var hour = parentDoc.getElementById('hour') ? parseInt(parentDoc.getElementById('hour').value) : 0;"
+                "        var variable = parentDoc.getElementById('variable') ? parentDoc.getElementById('variable').value : '';"
+                "        var data_source = parentDoc.getElementById('data_source') ? parentDoc.getElementById('data_source').value : '';"
+                "        fetch('/sample_point', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({lat:lat, lon:lon, date:date, hour:hour, variable:variable, data_source:data_source}) })"
+                "          .then(function(r){ return r.json(); })"
+                "          .then(function(d){ var content = d.success ? (String(d.value) + ' ' + (d.units||'')) : ('Error: ' + (d.error||'')); L.popup().setLatLng(e.latlng).setContent(content).openOn(map); })"
+                "          .catch(function(err){ L.popup().setLatLng(e.latlng).setContent('Sample error: ' + err.message).openOn(map); });"
+                "      });"
+                "    } else if(attempts >= maxAttempts) { clearInterval(iv); }"
+                "  }, 250);"
+                "})();"
+                "</script>"
+            )
+            m.get_root().html.add_child(folium.Element(sampling_js))
+        except Exception:
+            pass
         
         # Variable info for current variable
         variable_info = {
@@ -681,7 +726,32 @@ class WeatherMapRenderer:
         
         <!-- Opacity Slider -->
         <div>
-            <label for="opacitySlider" style="font-weight: bold; display: block; margin-bottom: 5px;">
+        </div>
+
+        <script>
+        // Attach click handler to map to enable sampling
+        try {{
+            map.on('click', async function(e) {{
+                try {{
+                    var lat = e.latlng.lat;
+                    var lon = e.latlng.lng;
+                    const parentDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+                    const resp = await fetch('/sample_point', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ lat: lat, lon: lon, date: (parentDoc.getElementById('date') ? parentDoc.getElementById('date').value.replace(/-/g,'') : ''), hour: parseInt(parentDoc.getElementById('hour') ? parentDoc.getElementById('hour').value : 0), variable: (parentDoc.getElementById('variableSelect') ? parentDoc.getElementById('variableSelect').value : (parentDoc.getElementById('variableSelect') && parentDoc.getElementById('variableSelect').options.length>0 ? parentDoc.getElementById('variableSelect').options[0].value : '')), data_source: (parentDoc.getElementById('data_source') ? parentDoc.getElementById('data_source').value : '') })
+                    });
+                    const data = await resp.json();
+                    const content = data.success ? (String(data.value) + ' ' + (data.units || '')) : ('Error: ' + (data.error || ''));
+                    L.popup().setLatLng(e.latlng).setContent(content).openOn(map);
+                }} catch (err) {{
+                    L.popup().setLatLng(e.latlng).setContent('Sample error: ' + err.message).openOn(map);
+                }}
+            }});
+        }} catch (e) {{
+            // ignore if map not available
+        }}
+        </script>
                 Layer Opacity: <span id="opacityValue">60%</span>
             </label>
             <input type="range" id="opacitySlider" min="0" max="100" value="60" 

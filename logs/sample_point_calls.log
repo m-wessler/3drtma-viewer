@@ -1,0 +1,26 @@
+{"time": "2025-08-14T22:03:08.470635", "payload": {"lat": 39.51251701659638, "lon": -113.75244140625001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:03:09.412465", "payload": {"lat": 39.70296052957233, "lon": -113.565673828125, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:03:11.426952", "payload": {"lat": 40.52632651074403, "lon": -111.02783203125001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:03:14.164106", "payload": {"lat": 40.451127265872316, "lon": -111.36840820312501, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:03:51.692949", "payload": {"lat": 40.44694705960048, "lon": -113.41186523437501, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:06:24.432459", "payload": {"lat": 35.496456056584165, "lon": -112.28027343750001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:06:29.777355", "payload": {"lat": 43.113014204188914, "lon": -116.52648925781251, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:06:32.189950", "payload": {"lat": 38.65119833229951, "lon": -115.00488281250001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:06:39.743311", "payload": {"lat": 39.53793974517628, "lon": -115.8782958984375, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:07:42.728584", "payload": {"lat": 40.073868105094846, "lon": -114.00512695312501, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:07:44.455897", "payload": {"lat": 39.308800296002936, "lon": -117.74047851562501, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:16:37.566658", "payload": {"lat": 39.842286020743394, "lon": -115.26855468750001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:16:58.567719", "payload": {"lat": 40.6306300839918, "lon": -111.4013671875, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:17:05.947016", "payload": {"lat": 41.409775832009565, "lon": -115.62011718750001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:17:12.717750", "payload": {"lat": 43.56447158721811, "lon": -113.55468750000001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:18:29.341335", "payload": {"lat": 37.16031654673677, "lon": -84.90234375000001, "date": "20250814", "hour": 21, "variable": "DPT", "data_source": "3DRTMA_minus_RTMA", "pressure_level": ""}}
+{"time": "2025-08-14T22:18:30.949194", "payload": {"lat": 38.26406296833961, "lon": -96.94335937500001, "date": "20250814", "hour": 21, "variable": "DPT", "data_source": "3DRTMA_minus_RTMA", "pressure_level": ""}}
+{"time": "2025-08-14T22:19:52.393569", "payload": {"lat": 35.7286770448517, "lon": -94.82299804687501, "date": "20250814", "hour": 21, "variable": "DPT", "data_source": "3DRTMA_minus_RTMA", "pressure_level": ""}}
+{"time": "2025-08-14T22:20:56.120421", "payload": {"lat": 38.94232097947902, "lon": -110.58837890625001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:24:59.754806", "payload": {"lat": 34.125447565116126, "lon": -113.33496093750001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:25:25.261225", "payload": {"lat": 36.06686213257888, "lon": -111.51123046875001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:25:34.104661", "payload": {"lat": 40.245991504199026, "lon": -110.30273437500001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:26:49.877988", "payload": {"lat": 44.37098696297173, "lon": -107.92968750000001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:30:27.298694", "payload": {"lat": 35.65729624809628, "lon": -123.55224609375001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:32:43.249640", "payload": {"lat": 39.90973623453719, "lon": -111.51123046875001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
+{"time": "2025-08-14T22:32:46.126678", "payload": {"lat": 42.17968819665963, "lon": -112.47802734375001, "date": "20250814", "hour": 21, "variable": "TMP", "data_source": "RTMA"}}
